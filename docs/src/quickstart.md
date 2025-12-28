@@ -144,6 +144,16 @@ base_system
 # The base system augmented with some incremental resource of interest
 augmented_system
 
+You can also choose the solution method for ELCC and EFC calculation. The default is a bisection method (EFC, ELCC), but a secant method (EFC_Secant, ELCC_Secant) is also available.
+
+```julia
+# Bisection method (default)
+elcc_bisection = assess(rts_gmlc_sys, rts_gmlc_sys_growth, ELCC{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
+
+# Secant method
+elcc_secant = assess(rts_gmlc_sys, rts_gmlc_sys_growth, ELCC_Secant{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
+```
+
 # Get the lower and upper bounds on the ELCC estimate for the resource
 elcc = assess(
     base_system, augmented_system, ELCC{EUE}(1000, "A"),
