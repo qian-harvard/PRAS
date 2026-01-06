@@ -133,11 +133,18 @@ function assess(sys_baseline::S, sys_augmented::S,
         c_next_float = c_curr - metric_diff_curr * (c_curr - c_prev) / (metric_diff_curr - metric_diff_prev)
         c_next = round(Int, c_next_float)
 
+        # Clamp to feasible capacity range [0, capacity_max]
+        c_next_clamped = min(max(c_next, 0), params.capacity_max)
+        if params.verbose && c_next_clamped != c_next
+            @info "Secant update out of bounds (got $c_next, clamped to $c_next_clamped within [0, $(params.capacity_max)])"
+        end
+        c_next = c_next_clamped
+
         # Check stopping criteria: Capacity gap
         if abs(c_next - c_curr) <= params.capacity_gap
              params.verbose && @info "Capacity change within tolerance ($(params.capacity_gap)), stopping."
              final_val = c_next
-             
+            
              # Evaluate final point if different
              if c_next != c_curr
                 update_load!(sys_variable, elcc_regions, base_load, c_next)
