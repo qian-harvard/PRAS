@@ -154,6 +154,7 @@ elcc_bisection = assess(base_system, augmented_system, ELCC{EUE}(200, "1"), Sequ
 elcc_secant = assess(base_system, augmented_system, ELCC_Secant{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
 ```
 
+Note that in the `rts_gmlc_sys` example, the region is identified by the string `"1"`, which corresponds to region 1 in that dataset.
 # Get the lower and upper bounds on the ELCC estimate for the resource
 elcc = assess(
     base_system, augmented_system, ELCC{EUE}(1000, "A"),
