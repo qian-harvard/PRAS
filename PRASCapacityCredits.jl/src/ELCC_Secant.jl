@@ -60,6 +60,53 @@ function assess(sys_baseline::S, sys_augmented::S,
     push!(capacities, c_curr)
     push!(metrics, m_curr)
 
+    # Ensure the initial Secant points (c_prev, c_curr) bracket the target metric.
+    # If they do not, step through capacity in increments of capacity_gap to find
+    # a pair of points with a sign change in (metric - target_metric).
+    f_prev = m_prev - target_metric
+    f_curr = m_curr - target_metric
+
+    if f_prev * f_curr > 0
+        # Existing endpoints do not bracket the target; search for a bracketing pair.
+        empty!(capacities)
+        empty!(metrics)
+
+        # Recompute at 0 MW to reset the first point.
+        c_prev = 0
+        update_load!(sys_variable, elcc_regions, base_load, c_prev)
+        m_prev = M(first(assess(sys_variable, simulationspec, Shortfall())))
+        f_prev = m_prev - target_metric
+        push!(capacities, c_prev)
+        push!(metrics, m_prev)
+
+        step = max(params.capacity_gap, 1)
+        c_curr = step
+        found_bracket = false
+
+        while c_curr <= params.capacity_max
+            update_load!(sys_variable, elcc_regions, base_load, c_curr)
+            m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
+            f_curr = m_curr - target_metric
+
+            push!(capacities, c_curr)
+            push!(metrics, m_curr)
+
+            if f_prev * f_curr <= 0
+                # Found bracketing interval [c_prev, c_curr].
+                found_bracket = true
+                break
+            end
+
+            # Advance to next interval.
+            c_prev = c_curr
+            m_prev = m_curr
+            f_prev = f_curr
+            c_curr += step
+        end
+
+        # If no bracketing pair was found, we keep the last two points encountered.
+        # This preserves existing behaviour while having explored the space more.
+    end
     iter = 0
     max_iter = 100 
 
