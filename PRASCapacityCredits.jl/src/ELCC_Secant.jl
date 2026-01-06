@@ -170,6 +170,10 @@ function assess(sys_baseline::S, sys_augmented::S,
         
     end
     
+    if iter >= max_iter && params.verbose
+        @warn "ELCC_Secant did not converge within $(max_iter) iterations; using last computed capacity value $(final_val)."
+    end
+    
     return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
         target_metric, final_val, final_val, capacities, metrics)
 
