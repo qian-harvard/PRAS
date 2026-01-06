@@ -151,6 +151,9 @@ function assess(sys_baseline::S, sys_augmented::S,
         
     end
 
+    if iter >= max_iter && params.verbose
+        @warn "EFC_Secant did not converge within maximum iterations ($(max_iter)); using last capacity value $(final_val)."
+    end
     return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
         target_metric, final_val, final_val, capacities, metrics)
 
