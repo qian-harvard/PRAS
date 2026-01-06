@@ -47,17 +47,51 @@ function assess(sys_baseline::S, sys_augmented::S,
     metrics = typeof(target_metric)[]
 
     # Initial points for Secant method
-    # Point 0: 0 MW
+    # Start at 0 MW and search for a point that brackets the target metric
     c_prev = 0
     update_firmcapacity!(sys_variable, efc_gens, c_prev)
     m_prev = M(first(assess(sys_variable, simulationspec, Shortfall())))
-    push!(capacities, c_prev)
-    push!(metrics, m_prev)
+    f_prev = m_prev - target_metric
 
-    # Point 1: Max Capacity
+    # Try using capacity_max as the second point first
+    bracket_found = false
     c_curr = params.capacity_max
     update_firmcapacity!(sys_variable, efc_gens, c_curr)
     m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
+    f_curr = m_curr - target_metric
+
+    if f_prev * f_curr <= 0
+        bracket_found = true
+    else
+        # Scan capacities in steps of capacity_gap to find a bracketing pair
+        for c in params.capacity_gap:params.capacity_gap:params.capacity_max
+            c_curr = c
+            update_firmcapacity!(sys_variable, efc_gens, c_curr)
+            m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
+            f_curr = m_curr - target_metric
+
+            if f_prev * f_curr <= 0
+                bracket_found = true
+                break
+            end
+
+            # Move forward: current point becomes previous for next iteration
+            c_prev = c_curr
+            m_prev = m_curr
+            f_prev = f_curr
+        end
+    end
+
+    if !bracket_found
+        error("EFC_Secant initialization failed to bracket target metric within [0, capacity_max]. " *
+              "Consider increasing capacity_max or adjusting capacity_gap.")
+    end
+
+    # Record the bracketing points as initial values for the Secant method
+    empty!(capacities)
+    empty!(metrics)
+    push!(capacities, c_prev)
+    push!(metrics, m_prev)
     push!(capacities, c_curr)
     push!(metrics, m_curr)
 
