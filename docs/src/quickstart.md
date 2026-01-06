@@ -148,10 +148,10 @@ You can also choose the solution method for ELCC and EFC calculation. The defaul
 
 ```julia
 # Bisection method (default)
-elcc_bisection = assess(rts_gmlc_sys, rts_gmlc_sys_growth, ELCC{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
+elcc_bisection = assess(base_system, augmented_system, ELCC{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
 
 # Secant method
-elcc_secant = assess(rts_gmlc_sys, rts_gmlc_sys_growth, ELCC_Secant{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
+elcc_secant = assess(base_system, augmented_system, ELCC_Secant{EUE}(200, "1"), SequentialMonteCarlo(samples=10,seed=1))
 ```
 
 # Get the lower and upper bounds on the ELCC estimate for the resource
