@@ -119,7 +119,7 @@ function assess(sys_baseline::S, sys_augmented::S,
 
         # Secant update
         c_next_float = c_curr - g_curr * (c_curr - c_prev) / (g_curr - g_prev)
-        c_next = round(Int, c_next_float)
+        c_next = clamp(round(Int, c_next_float), 0, params.capacity_max)
 
         # Check stopping criteria: Capacity gap
         if abs(c_next - c_curr) <= params.capacity_gap
