@@ -72,18 +72,18 @@ function assess(sys_baseline::S, sys_augmented::S,
             "Iteration $iter: c_prev=$c_prev, c_curr=$c_curr, m_prev=$(val(m_prev)), m_curr=$(val(m_curr)), target=$(val(target_metric))"
         )
 
-        # g(c) = Metric(c) - Target
-        g_prev = val(m_prev) - val(target_metric)
-        g_curr = val(m_curr) - val(target_metric)
+        # g(c) = Metric(c) - Target, i.e., the difference between the metric and the target
+        metric_diff_prev = val(m_prev) - val(target_metric)
+        metric_diff_curr = val(m_curr) - val(target_metric)
 
-        if abs(g_curr - g_prev) < 1e-9
+        if abs(metric_diff_curr - metric_diff_prev) < 1e-9
             params.verbose && @info "Denominator too small in Secant method, stopping."
             final_val = c_curr
             break
         end
 
         # Secant update
-        c_next_float = c_curr - g_curr * (c_curr - c_prev) / (g_curr - g_prev)
+        c_next_float = c_curr - metric_diff_curr * (c_curr - c_prev) / (metric_diff_curr - metric_diff_prev)
         c_next = round(Int, c_next_float)
 
         # Check stopping criteria: Capacity gap
