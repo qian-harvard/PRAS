@@ -58,133 +58,98 @@ function assess(sys_baseline::S, sys_augmented::S,
         copy_load(sys_augmented, params.regions)
 
     # Initial points for Secant method
-    # Point 0: 0 MW
-    c_prev = 0
-    update_load!(sys_variable, elcc_regions, base_load, c_prev)
-    m_prev = M(first(assess(sys_variable, simulationspec, Shortfall())))
-    push!(capacities, c_prev)
-    push!(metrics, m_prev)
+    # L = 0 MW
+    c_low = 0
+    update_load!(sys_variable, elcc_regions, base_load, c_low)
+    m_low = M(first(assess(sys_variable, simulationspec, Shortfall())))
+    f_low = val(m_low) - val(target_metric)
+    push!(capacities, c_low)
+    push!(metrics, m_low)
 
-    # Point 1: Max Capacity
-    c_curr = params.capacity_max
-    update_load!(sys_variable, elcc_regions, base_load, c_curr)
-    m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
-    push!(capacities, c_curr)
-    push!(metrics, m_curr)
+    # U = Max Capacity
+    c_high = params.capacity_max
+    update_load!(sys_variable, elcc_regions, base_load, c_high)
+    m_high = M(first(assess(sys_variable, simulationspec, Shortfall())))
+    f_high = val(m_high) - val(target_metric)
+    push!(capacities, c_high)
+    push!(metrics, m_high)
 
-    # Ensure the initial Secant points (c_prev, c_curr) bracket the target metric.
-    # If they do not, step through capacity in increments of capacity_gap to find
-    # a pair of points with a sign change in (metric - target_metric).
-    f_prev = val(m_prev) - val(target_metric)
-    f_curr = val(m_curr) - val(target_metric)
-
-    if f_prev * f_curr > 0
-        # Existing endpoints do not bracket the target; search for a bracketing pair.
-        empty!(capacities)
-        empty!(metrics)
-
-        # Recompute at 0 MW to reset the first point.
-        c_prev = 0
-        update_load!(sys_variable, elcc_regions, base_load, c_prev)
-        m_prev = M(first(assess(sys_variable, simulationspec, Shortfall())))
-        f_prev = val(m_prev) - val(target_metric)
-        push!(capacities, c_prev)
-        push!(metrics, m_prev)
-
-        step = max(params.capacity_gap, 1)
-        c_curr = step
+    # Bracketing check/search
+    if f_low * f_high > 0
+        # If they don't bracket, we scan to find a bracket
         found_bracket = false
-
-        while c_curr <= params.capacity_max
-            update_load!(sys_variable, elcc_regions, base_load, c_curr)
-            m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
-            f_curr = val(m_curr) - val(target_metric)
-
-            push!(capacities, c_curr)
-            push!(metrics, m_curr)
-
-            if f_prev * f_curr <= 0
-                # Found bracketing interval [c_prev, c_curr].
+        step = max(params.capacity_gap, 1)
+        
+        # We assume f is increasing (ELCC). If both are positive, we are already above target?
+        # But usually at 0 load, EUE_augmented < EUE_baseline, so f_low < 0.
+        # If f_low > 0, then even at 0 MW added load, augmented is worse than baseline. ELCC = 0.
+        if f_low > 0
+             return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
+                target_metric, 0, 0, capacities, metrics)
+        end
+        
+        # If both are negative, scan upwards
+        c_prev = c_low
+        f_prev = f_low
+        for c in step:step:params.capacity_max
+            update_load!(sys_variable, elcc_regions, base_load, c)
+            m_c = M(first(assess(sys_variable, simulationspec, Shortfall())))
+            f_c = val(m_c) - val(target_metric)
+            push!(capacities, c)
+            push!(metrics, m_c)
+            
+            if f_c * f_prev <= 0
+                c_low, c_high = c_prev, c
+                f_low, f_high = f_prev, f_c
                 found_bracket = true
                 break
             end
-
-            # Advance to next interval.
-            c_prev = c_curr
-            m_prev = m_curr
-            f_prev = f_curr
-            c_curr += step
+            c_prev, f_prev = c, f_c
         end
-
-        # If no bracketing pair was found, we keep the last two points encountered.
-        # This preserves existing behaviour while having explored the space more.
+        
+        if !found_bracket
+            # If still not found, return the best we have (either 0 or max)
+            final_val = f_high < 0 ? c_high : c_low
+            return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
+                target_metric, final_val, final_val, capacities, metrics)
+        end
     end
+
+    # Robust Secant (False Position / Regula Falsi) loop
     iter = 0
     max_iter = 100 
 
-    final_val = c_curr
-
-    while iter < max_iter
+    while (c_high - c_low) > params.capacity_gap && iter < max_iter
         iter += 1
 
-        params.verbose && println(
-            "Iteration $iter: c_prev=$c_prev, c_curr=$c_curr, m_prev=$(val(m_prev)), m_curr=$(val(m_curr)), target=$(val(target_metric))"
-        )
-
-        # g(c) = Metric(c) - Target, i.e., the difference between the metric and the target
-        metric_diff_prev = val(m_prev) - val(target_metric)
-        metric_diff_curr = val(m_curr) - val(target_metric)
-
-        if abs(metric_diff_curr - metric_diff_prev) < 1e-9
-            params.verbose && @info "Denominator too small in Secant method, stopping."
-            final_val = c_curr
-            break
-        end
-
-        # Secant update
-        c_next_float = c_curr - metric_diff_curr * (c_curr - c_prev) / (metric_diff_curr - metric_diff_prev)
-        c_next = round(Int, c_next_float)
-
-        # Clamp to feasible capacity range [0, capacity_max]
-        c_next_clamped = min(max(c_next, 0), params.capacity_max)
-        if params.verbose && c_next_clamped != c_next
-            @info "Secant update out of bounds (got $c_next, clamped to $c_next_clamped within [0, $(params.capacity_max)])"
-        end
-        c_next = c_next_clamped
-
-        # Check stopping criteria: Capacity gap
-        if abs(c_next - c_curr) <= params.capacity_gap
-             params.verbose && @info "Capacity change within tolerance ($(params.capacity_gap)), stopping."
-             final_val = c_next
+        # Secant/Interpolation guess
+        if abs(f_high - f_low) < 1e-12
+            c_mid = div(c_low + c_high, 2)
+        else
+            c_mid_float = c_high - f_high * (c_high - c_low) / (f_high - f_low)
+            c_mid = round(Int, c_mid_float)
             
-             # Evaluate final point if different
-             if c_next != c_curr
-                update_load!(sys_variable, elcc_regions, base_load, c_next)
-                m_next = M(first(assess(sys_variable, simulationspec, Shortfall())))
-                push!(capacities, c_next)
-                push!(metrics, m_next)
-             end
-             break
+            # Ensure we are making progress and staying in the bracket
+            if c_mid <= c_low || c_mid >= c_high
+                c_mid = div(c_low + c_high, 2)
+            end
         end
 
-        # Evaluate new point
-        update_load!(sys_variable, elcc_regions, base_load, c_next)
-        m_next = M(first(assess(sys_variable, simulationspec, Shortfall())))
-        push!(capacities, c_next)
-        push!(metrics, m_next)
+        update_load!(sys_variable, elcc_regions, base_load, c_mid)
+        m_mid = M(first(assess(sys_variable, simulationspec, Shortfall())))
+        f_mid = val(m_mid) - val(target_metric)
+        push!(capacities, c_mid)
+        push!(metrics, m_mid)
 
-        # Setup for next iteration
-        c_prev = c_curr
-        m_prev = m_curr
-        c_curr = c_next
-        m_curr = m_next
-        final_val = c_curr
-        
+        if f_mid * f_low > 0
+            c_low, f_low = c_mid, f_mid
+        else
+            c_high, f_high = c_mid, f_mid
+        end
     end
     
-    if iter >= max_iter && params.verbose
-        @warn "ELCC_Secant did not converge within $(max_iter) iterations; using last computed capacity value $(final_val)."
-    end
+    # Return the converged value (conservative lower bound of the bracket)
+    final_val = c_low
     
     return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
         target_metric, final_val, final_val, capacities, metrics)

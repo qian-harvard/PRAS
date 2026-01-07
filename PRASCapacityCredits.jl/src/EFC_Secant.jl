@@ -59,113 +59,98 @@ function assess(sys_baseline::S, sys_augmented::S,
     metrics = typeof(target_metric)[]
 
     # Initial points for Secant method
-    # Start at 0 MW and search for a point that brackets the target metric
-    c_prev = 0
-    update_firmcapacity!(sys_variable, efc_gens, c_prev)
-    m_prev = M(first(assess(sys_variable, simulationspec, Shortfall())))
-    f_prev = val(m_prev) - val(target_metric)
+    # L = 0 MW
+    c_low = 0
+    update_firmcapacity!(sys_variable, efc_gens, c_low)
+    m_low = M(first(assess(sys_variable, simulationspec, Shortfall())))
+    f_low = val(m_low) - val(target_metric)
+    push!(capacities, c_low)
+    push!(metrics, m_low)
 
-    # Try using capacity_max as the second point first
-    bracket_found = false
-    c_curr = params.capacity_max
-    update_firmcapacity!(sys_variable, efc_gens, c_curr)
-    m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
-    f_curr = val(m_curr) - val(target_metric)
+    # U = Max Capacity
+    c_high = params.capacity_max
+    update_firmcapacity!(sys_variable, efc_gens, c_high)
+    m_high = M(first(assess(sys_variable, simulationspec, Shortfall())))
+    f_high = val(m_high) - val(target_metric)
+    push!(capacities, c_high)
+    push!(metrics, m_high)
 
-    if f_prev * f_curr <= 0
-        bracket_found = true
-    else
-        # Scan capacities in steps of capacity_gap to find a bracketing pair
-        for c in params.capacity_gap:params.capacity_gap:params.capacity_max
-            c_curr = c
-            update_firmcapacity!(sys_variable, efc_gens, c_curr)
-            m_curr = M(first(assess(sys_variable, simulationspec, Shortfall())))
-            f_curr = val(m_curr) - val(target_metric)
-
-            if f_prev * f_curr <= 0
-                bracket_found = true
+    # Bracketing check/search
+    if f_low * f_high > 0
+        # If they don't bracket, we scan to find a bracket
+        found_bracket = false
+        step = max(params.capacity_gap, 1)
+        
+        # We assume f is decreasing (EFC). If both are negative, we are already above target?
+        # If f_low < 0, then even at 0 MW firm capacity, augmented is better than baseline. EFC = 0.
+        if f_low < 0
+             return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
+                target_metric, 0, 0, capacities, metrics)
+        end
+        
+        # If both are positive, scan upwards
+        c_prev = c_low
+        f_prev = f_low
+        for c in step:step:params.capacity_max
+            update_firmcapacity!(sys_variable, efc_gens, c)
+            m_c = M(first(assess(sys_variable, simulationspec, Shortfall())))
+            f_c = val(m_c) - val(target_metric)
+            push!(capacities, c)
+            push!(metrics, m_c)
+            
+            if f_c * f_prev <= 0
+                c_low, c_high = c_prev, c
+                f_low, f_high = f_prev, f_c
+                found_bracket = true
                 break
             end
-
-            # Move forward: current point becomes previous for next iteration
-            c_prev = c_curr
-            m_prev = m_curr
-            f_prev = f_curr
+            c_prev, f_prev = c, f_c
+        end
+        
+        if !found_bracket
+            # If still not found, return the best we have (either 0 or max)
+            final_val = f_high > 0 ? c_high : c_low
+            return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
+                target_metric, final_val, final_val, capacities, metrics)
         end
     end
 
-    if !bracket_found
-        error("EFC_Secant initialization failed to bracket target metric within [0, capacity_max]. " *
-              "Consider increasing capacity_max or adjusting capacity_gap.")
-    end
-
-    # Record the bracketing points as initial values for the Secant method
-    empty!(capacities)
-    empty!(metrics)
-    push!(capacities, c_prev)
-    push!(metrics, m_prev)
-    push!(capacities, c_curr)
-    push!(metrics, m_curr)
-
+    # Robust Secant (False Position / Regula Falsi) loop
     iter = 0
     max_iter = 100 
-    
-    final_val = c_curr
 
-    while iter < max_iter
+    while (c_high - c_low) > params.capacity_gap && iter < max_iter
         iter += 1
 
-        params.verbose && println(
-            "Iteration $iter: c_prev=$c_prev, c_curr=$c_curr, m_prev=$(val(m_prev)), m_curr=$(val(m_curr)), target=$(val(target_metric))"
-        )
-
-        # g(c) = Metric(c) - Target
-        metric_diff_prev = val(m_prev) - val(target_metric)
-        metric_diff_curr = val(m_curr) - val(target_metric)
-
-        if abs(metric_diff_curr - metric_diff_prev) < 1e-9
-            params.verbose && @info "Denominator too small in Secant method, stopping."
-            final_val = c_curr
-            break
+        # Secant/Interpolation guess
+        if abs(f_high - f_low) < 1e-12
+            c_mid = div(c_low + c_high, 2)
+        else
+            c_mid_float = c_high - f_high * (c_high - c_low) / (f_high - f_low)
+            c_mid = round(Int, c_mid_float)
+            
+            # Ensure we are making progress and staying in the bracket
+            if c_mid <= c_low || c_mid >= c_high
+                c_mid = div(c_low + c_high, 2)
+            end
         end
 
-        # Secant update
-        c_next_float = c_curr - metric_diff_curr * (c_curr - c_prev) / (metric_diff_curr - metric_diff_prev)
-        c_next = clamp(round(Int, c_next_float), 0, params.capacity_max)
+        update_firmcapacity!(sys_variable, efc_gens, c_mid)
+        m_mid = M(first(assess(sys_variable, simulationspec, Shortfall())))
+        f_mid = val(m_mid) - val(target_metric)
+        push!(capacities, c_mid)
+        push!(metrics, m_mid)
 
-        # Check stopping criteria: Capacity gap
-        if abs(c_next - c_curr) <= params.capacity_gap
-             params.verbose && @info "Capacity change within tolerance ($(params.capacity_gap)), stopping."
-             final_val = c_next
-
-             # Evaluate final point if different
-             if c_next != c_curr
-                update_firmcapacity!(sys_variable, efc_gens, c_next)
-                m_next = M(first(assess(sys_variable, simulationspec, Shortfall())))
-                push!(capacities, c_next)
-                push!(metrics, m_next)
-             end
-             break
+        if f_mid * f_low > 0
+            c_low, f_low = c_mid, f_mid
+        else
+            c_high, f_high = c_mid, f_mid
         end
-
-        # Evaluate new point
-        update_firmcapacity!(sys_variable, efc_gens, c_next)
-        m_next = M(first(assess(sys_variable, simulationspec, Shortfall())))
-        push!(capacities, c_next)
-        push!(metrics, m_next)
-
-        # Setup for next iteration
-        c_prev = c_curr
-        m_prev = m_curr
-        c_curr = c_next
-        m_curr = m_next
-        final_val = c_curr
-        
     end
-
-    if iter >= max_iter && params.verbose
-        @warn "EFC_Secant did not converge within maximum iterations ($(max_iter)); using last capacity value $(final_val)."
-    end
+    
+    # Return the converged value (conservative lower bound of the bracket)
+    final_val = c_low
+    
     return CapacityCreditResult{typeof(params), typeof(target_metric), P}(
         target_metric, final_val, final_val, capacities, metrics)
 
